@@ -1,8 +1,3 @@
-"""
-Propósito: Dividir as questões por padrão de linhas divisórias (Preto/Cinza) do ENEM 2008.
-Autor: Adaptado para ENEM 2008
-"""
-
 from PIL import Image
 import os
 
@@ -15,112 +10,134 @@ def converter_cor_gimp_para_rgb(gimp_r, gimp_g, gimp_b):
     b = int((gimp_b / 100) * 255)
     return (r, g, b)
 
-def encontrar_linha_divisoria(imagem, cor_alvo, tolerancia=30, altura_faixa=2):
+def encontrar_faixa_cinza(imagem, cor_alvo, tolerancia=15):
     """
-    Encontra posições onde há uma linha horizontal escura indicando separação ou início
+    Encontra posições de corte baseadas em uma faixa cinza de altura entre 34 e 40 pixels (37 +/- 3),
+    analisando a faixa horizontal dos pixels 110 a 120 de largura.
+    Retorna uma lista de tuplas contendo: (posicao_corte, proximo_inicio_da_imagem)
     """
     largura, altura = imagem.size
     pixels = imagem.load()
     
-    posicoes_corte = []
-    
-    # Percorre a imagem de cima para baixo
-    y = 0
-    while y < altura - altura_faixa:
-        faixa_encontrada = True
-        
-        for dy in range(altura_faixa):
-            # Analisa o penúltimo pixel da direita (conforme OBS2 original)
-            # Dica: Se a linha divisória não tocar a borda, mude 'largura-2' para o meio 'largura // 2'
-            pixel = pixels[largura - 2, y + dy]
+    # 1. Identifica quais linhas (y) atendem ao critério de cor nas colunas de 110 a 120
+    linhas_com_padrao = []
+    for y in range(altura):
+        linha_valida = True
+        for x in range(110, 121):  # Percorre as colunas de 110 a 120 inclusive
+            if x >= largura:
+                linha_valida = False
+                break
             
-            if len(pixel) == 4:  # RGBA
+            pixel = pixels[x, y]
+            if len(pixel) == 4:  # Se for imagem contendo canal Alpha (RGBA)
                 r, g, b, a = pixel
-            else:  # RGB
+            else:  # RGB padrão
                 r, g, b = pixel[:3]
             
-            # Verifica se o pixel é escuro o suficiente (próximo do preto da linha/texto)
+            # Verifica se a cor do pixel está fora da tolerância estipulada
             if (abs(r - cor_alvo[0]) > tolerancia or 
                 abs(g - cor_alvo[1]) > tolerancia or 
                 abs(b - cor_alvo[2]) > tolerancia):
-                faixa_encontrada = False
+                linha_valida = False
                 break
         
-        if faixa_encontrada:
-            # Ponto de corte ajustado para não cortar o topo do enunciado (15 pixels acima)
-            posicao_corte = y - 22
-            if posicao_corte < 0:
-                posicao_corte = 0
-                
-            posicoes_corte.append(posicao_corte)
-            print(f"Linha de corte encontrada em y={y}, recortando em y={posicao_corte}")
-            y += altura_faixa + 20  # Pula a região para evitar múltiplas detecções próximas
-        else:
-            y += 1
+        if linha_valida:
+            linhas_com_padrao.append(y)
+            
+    posicoes_corte = []
+    if not linhas_com_padrao:
+        return posicoes_corte
+        
+    # 2. Agrupa as linhas consecutivas encontradas para medir a altura real da faixa cinza
+    inicio_bloco = linhas_com_padrao[0]
+    fim_bloco = linhas_com_padrao[0]
     
+    for y in linhas_com_padrao[1:]:
+        if y == fim_bloco + 1:
+            fim_bloco = y
+        else:
+            altura_bloco = fim_bloco - inicio_bloco + 1
+            # Altura ideal: 37 pixels. Margem de erro aplicada: +/- 3 pixels (34 a 40)
+            if 34 <= altura_bloco <= 40:
+                pos_corte = inicio_bloco - 5  # Corta 5 pixels antes do padrão iniciar
+                if pos_corte < 0:
+                    pos_corte = 0
+                proximo_inicio = fim_bloco + 1  # Próxima questão começa logo após a faixa terminar
+                posicoes_corte.append((pos_corte, proximo_inicio))
+                print(f"Faixa cinza detectada: y={inicio_bloco} até y={fim_bloco} (Altura={altura_bloco}px). Cortando em y={pos_corte}")
+            
+            inicio_bloco = y
+            fim_bloco = y
+            
+    # Verifica e processa o último bloco pendente do loop
+    altura_bloco = fim_bloco - inicio_bloco + 1
+    if 34 <= altura_bloco <= 40:
+        pos_corte = inicio_bloco - 5
+        if pos_corte < 0:
+            pos_corte = 0
+        proximo_inicio = fim_bloco + 1
+        posicoes_corte.append((pos_corte, proximo_inicio))
+        print(f"Faixa cinza detectada: y={inicio_bloco} até y={fim_bloco} (Altura={altura_bloco}px). Cortando em y={pos_corte}")
+        
     return posicoes_corte
 
 def dividir_imagem_por_faixas(caminho_imagem, pasta_saida, cor_alvo):
     """
-    Divide a imagem verticalmente com base nos pontos de corte mapeados
+    Divide a imagem verticalmente utilizando as coordenadas dinâmicas detectadas
     """
-    if not os.path.exists(caminho_imagem):
-        print(f"Erro: O arquivo '{caminho_imagem}' não foi encontrado!")
-        return
-
     imagem = Image.open(caminho_imagem)
     largura, altura = imagem.size
     
-    print(f"Imagem carregada com sucesso: {largura}x{altura} pixels")
+    print(f"Imagem carregada: {largura}x{altura} pixels")
     
-    posicoes_corte = encontrar_linha_divisoria(imagem, cor_alvo)
+    # Busca os pontos exatos de corte baseados no novo padrão cinza
+    posicoes_corte = encontrar_faixa_cinza(imagem, cor_alvo)
     
     if not posicoes_corte:
-        print("Nenhum padrão visual de divisão foi encontrado. Verifique a cor alvo ou a coluna X analisada.")
+        print("Nenhuma faixa cinza dentro dos padrões foi encontrada na imagem!")
         return
     
-    print(f"Encontradas {len(posicoes_corte)} demarcações para separação.")
+    print(f"Encontradas {len(posicoes_corte)} faixas cinzas para realizar o corte.")
+    
     os.makedirs(pasta_saida, exist_ok=True)
     
     posicao_anterior = 0
     
-    for i, posicao_corte in enumerate(posicoes_corte):
-        if posicao_corte <= posicao_anterior:
+    for i, (pos_corte, proximo_inicio) in enumerate(posicoes_corte):
+        if pos_corte <= posicao_anterior:
             continue
             
-        area_corte = (0, posicao_anterior, largura, posicao_corte)
+        # Realiza o recorte da questão (do ponto final da última até 5 pixels antes da faixa atual)
+        area_corte = (0, posicao_anterior, largura, pos_corte)
         secao = imagem.crop(area_corte)
         
-        nome_arquivo = f"questao_{i+1:02d}.png"
+        nome_arquivo = f"parte_{i+1:03d}.png"
         caminho_completo = os.path.join(pasta_saida, nome_arquivo)
         secao.save(caminho_completo)
-        print(f"Salvo com sucesso: {caminho_completo} ({secao.width}x{secao.height}px)")
+        print(f"Salvo: {caminho_completo} ({secao.width}x{secao.height}px)")
         
-        posicao_anterior = posicao_corte
+        # O início do próximo bloco pula de forma limpa para o final da faixa cinza real detectada
+        posicao_anterior = proximo_inicio
     
-    # Seção final da última questão até o rodapé
+    # Recorta o trecho final (o espaço após a última faixa cinza detectada)
     if posicao_anterior < altura:
         area_corte = (0, posicao_anterior, largura, altura)
         secao = imagem.crop(area_corte)
         
-        nome_arquivo = f"questao_{len(posicoes_corte)+1:02d}.png"
+        nome_arquivo = f"parte_{len(posicoes_corte)+1:03d}.png"
         caminho_completo = os.path.join(pasta_saida, nome_arquivo)
         secao.save(caminho_completo)
-        print(f"Salvo seção final: {caminho_completo}")
+        print(f"Salvo: {caminho_completo} ({secao.width}x{secao.height}px)")
 
 if __name__ == "__main__":
-    # --- CONFIGURAÇÃO PARA COLUNAS CONCATENADAS ---
-    caminho_imagem = "colunas_concatenadas_verticalmente.png"
-    pasta_saida = "questoes_colunas"
+    # ATUALIZE as linhas abaixo de acordo com seus arquivos (OBS7)
+    caminho_imagem = "colunas_concatenadas_verticalmente.png"  # Substitua pelo nome ou caminho da imagem da prova
+    pasta_saida = "divididas"           # Substitua pelo nome da pasta onde salvar as questões
 
-    # --- DESCOMENTE ABAIXO QUANDO FOR PROCESSAR PÁGINAS INTEIRAS ---
-    # caminho_imagem = "./inteiras/pagina_enem_15.png"
-    # pasta_saida = "pagina_15"
+    # Configuração direta baseada no padrão RGB informado (204, 204, 204)
+    cor_do_padrao = (204, 204, 204)
+    print(f"Cor configurada para busca: RGB {cor_do_padrao}")
     
-    # No ENEM 2008, buscamos as linhas pretas/escuras de divisão (RGB próximo a 0, 0, 0)
-    # Valores de exemplo coletados via GIMP (0 a 100%): R: 5.0%, G: 5.0%, B: 5.0%
-    cor_do_padrao = converter_cor_gimp_para_rgb(5.0, 5.0, 5.0)
-    print(f"Analisando matriz de pixels baseada na cor: RGB {cor_do_padrao}")
-    
+    # Execução da automação
     dividir_imagem_por_faixas(caminho_imagem, pasta_saida, cor_do_padrao)
-    print("Processamento concluído com sucesso!")
+    print("Divisão concluída com sucesso!")
